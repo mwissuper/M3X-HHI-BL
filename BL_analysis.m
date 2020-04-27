@@ -1,20 +1,28 @@
 % Plot time series data for an individual subject. Calculate metrics for
-% participant. Use rawMarkers data so not do any filtering.
+% participant. Do all filtering in Nexus, so just look at
+% rawData.video.markers for marker data
+
 clear; clc; close all;
 
 % Analysis options
 
-subj = 4; % Total subj's 1:11. Do not trust FT1 for BL04 (looks not connected). BL01 force data might also be bad but need to check
+subj = 3; % Total subj's 1:11. Do not trust FT1 for BL04 (looks not connected). BL01 force data might also be bad but need to check
 analyzeForces = 0; % Tension is positive. Not confident of directions of off-axis force vectors unless use recoverForces so don't try to interpret directionality
 
 %% Plotting options
-plotTorso = 1; % 1 plot AP dir to check speed calculations
-plotVyTorso = 0; % Check begninning of moving vs. not moving
+plotTorso = 0; % 1 plot AP dir to check speed calculations
+plotVyTorso = 1; % Check begninning of moving vs. not moving
 plotHeel = 0;
 plotFz = 0; % Plot force in N with HS events
 plotFxy = 0;
 plotFzBias = 0; % Plot Fz volt vs. time for each axis for bias voltage trial
 plotFzV = 0; % Plot raw voltage for Fz for all trials as check on bias
+
+if plotVyTorso == 1 || plotFzV == 1
+    plotAllTrials = 1;
+else
+    plotAllTrials = 0; % plot only partner trials
+end
 
 pcount = 0;
 
@@ -40,6 +48,8 @@ colors(1,:) = [0.00,0.45,0.74]; % nice blue
 colors(2,:) = [0.85,0.33,0.10]; % nice red
 colors(3,:) = [0.47,0.67,0.19]; % nice green
 
+markerArray = {'CLAV','C7','LHEE','RHEE'}; % Markers to be analyzed
+
 %% First get voltage bias for zero for FT1 for each participant. Use first solo walking trial
 if analyzeForces == 1
     if subj == 2
@@ -57,16 +67,11 @@ if analyzeForces == 1
     end
     trialData = load([sourcefolder,'\',subjFolder,'\',filename]);
     s = size(trialData.rawData.analog.otherid);
-    
-    % Set up filter for marker data
-    fsM = trialData.VideoFrameRate;
-    wn = 20/(fsM/2);
-    [Bm,Am] = butter(3,wn,'low');
-    
+
     % Set up filter for force data
     fsA = trialData.AnalogFrameRate;
     wn = 60/(fsA/2);
-    [Bf,Af] = butter(3,wn,'low');
+    [Bf,Af] = butter(4,wn,'low');
     
     % Loop through all id names for analog input channels to pull out forces 
     for row = 1:s(1)
@@ -128,7 +133,7 @@ if subj >= 4 % now have baseline (eyes open) trials
     numrows = 6;
     numcols = 9;
 else
-    if plotFzV == 1 % plot all trials
+    if plotAllTrials == 1 % plot all trials
         numrows = 8;
         numcols = 6;
     else % plot only experimental trials with partner
@@ -185,7 +190,8 @@ meanFxy2PrefPre = []; meanFxy2Base = [];
 
 %% Loop through all trials for participant
 
-for n = 1:length(trialArray)
+for n = 14%1:length(trialArray)
+    clear Markers
     trial = trialArray(n)
     if trial < 10
         filename = sprintf('Trial0%i.mat',trialArray(n));
@@ -194,18 +200,30 @@ for n = 1:length(trialArray)
     end
     trialData = load([sourcefolder,'\',subjFolder,'\',filename]);
     
+    fsM = trialData.VideoFrameRate;  
     
-    % Parameters for filters for markers and forces from Sawers 2017
-    fs = 1/(diff(trialData.mtime(1:2)));
-    wn = 20/fs;
-    [Bm,Am] = butter(3,wn); % Filter for markers
-    wn = 60/fs;
-    [Bf,Af] = butter(3,wn); % Filter for forces
+    % Set up filter for force data
+    fsA = trialData.AnalogFrameRate;
+    wn = 60/(fsA/2);
+    [Bf,Af] = butter(4,wn,'low');
     
-    % Median filter and then lowpass filter all marker data to get rid of
-    % all spikes (due to dropped marker, etc)
-    Markers = medfilt1(trialData.rawMarkers);
-    Markers = filtfilt(Bf,Af,Markers);
+    % c3d files put in zeros for
+    % gaps so need to find these and make these nan's!
+    % Loop through all markers
+    % Will only work for markers that are mostly labeled, so choose which
+    % ones to preprocess this way.
+    for i = 1:length(markerArray)
+        indMarker(i) = findMarkerInd(markerArray{i},subj,trialData.MarkerID);
+    end
+        
+    for i = indMarker
+        Markers(:,i,:) = replaceZeros(trialData.rawData.video.markers(:,i,:));
+%         if isempty(find(isnan(Markers(:,i,:)),1,'first')) % no nan values, ok to use filtfilt
+%             Markers(:,i,:) = filtfilt(Bm,Am,Markers(:,i,:)); % will error out if there are nan's!
+%         else
+%             Markers(:,i,:) = filtIgnoreNan(Bm,Am,order,Markers(:,i,:));
+%         end
+    end
 
     cond = config{trialArray(n),2};
     if ~strcmp(cond,'Asymmetric')
@@ -225,6 +243,7 @@ for n = 1:length(trialArray)
             c7 = squeeze(Markers(:,temp.indC7,:))./1000;
             temp = [];
             torso = c7;
+            disp('c7')
         else
             torso = clav;
         end
@@ -234,10 +253,10 @@ for n = 1:length(trialArray)
         indStart = find(vyTorso > vyThresh,1,'first');
         indEnd = find(vyTorso(indStart:end) > vyThresh & vyTorsoOffset(indStart:end) < vyThresh,1,'last') + indStart;
 
-        %% Plot speed of torso marker to check that beginning and end of fwd walking period found correctly
+        %% Plot vel of torso marker to check that beginning and end of fwd walking period found correctly
         if plotVyTorso == 1
             plotind = plotind + 1;
-            subplot(numcols,numrows,plotind)
+%             subplot(numcols,numrows,plotind)
             plot(trialData.mtime(2:end),vyTorso),ylabel('Torso AP vel (m/s)'); hold on;
             xlim([trialData.mtime(indStart)-0.2 trialData.mtime(indEnd)+0.2])
             vline([trialData.mtime(indStart) trialData.mtime(indEnd)],'k-')
@@ -281,51 +300,53 @@ for n = 1:length(trialArray)
         indRHS(ind1) = [];
         ind2 = find(indRHS >= indLHS(end) & indRHS <= indEnd);
         indRHS(ind2) = [];
-        if subj == 2 % exceptions where algo didn't work and manually correct event based on visual observation in Nexus
-            if trial == 18
-                indRHS(2) = 561;
-            elseif trial == 32
-                indLHS(3) = 1066;
-            end
-        elseif subj == 3
-            if trial == 5
-                indRHS(1) = 408;
-                indRHS(2) = 648;
-                indLHS(1) = 281;
-            elseif trial == 15
-                indRHS(1) = 381;
-            end
-        elseif subj == 4
-            if trial == 5
-                indRHS(end) = 757;
-                indLHS(end) = 846;
-            elseif trial == 9
-                indRHS(1) = 514;
-            elseif trial == 14
-                indLHS(end) = 710;
-            elseif trial == 16
-                indLHS(end) = 764;
-            elseif trial == 24
-                indRHS(2) = 721;
-                indLHS(3) = 865;
-            elseif trial == 27
-                indLHS(end-1) = [];
-            elseif trial == 31
-                indLHS(3) = [];
-                indRHS(1) = 425;
-                indRHS(3) = 1082;
-            elseif trial == 34
-                indLHS(3) = [];
-            elseif trial == 39
-                indLHS(end) = 732;
-            elseif trial == 47
-                indRHS(2) = 595;
-            end
-        elseif subj == 5
-            if trial == 40
-                indRHS(2) = [];
-            end
-        end
+        
+        %% Commented out following bc done with old Nexus pipelines and old procBatch Marker output
+%         if subj == 2 % exceptions where algo didn't work and manually correct event based on visual observation in Nexus
+%             if trial == 18
+%                 indRHS(2) = 561;
+%             elseif trial == 32
+%                 indLHS(3) = 1066;
+%             end
+%         elseif subj == 3
+%             if trial == 5
+%                 indRHS(1) = 408;
+%                 indRHS(2) = 648;
+%                 indLHS(1) = 281;
+%             elseif trial == 15
+%                 indRHS(1) = 381;
+%             end
+%         elseif subj == 4
+%             if trial == 5
+%                 indRHS(end) = 757;
+%                 indLHS(end) = 846;
+%             elseif trial == 9
+%                 indRHS(1) = 514;
+%             elseif trial == 14
+%                 indLHS(end) = 710;
+%             elseif trial == 16
+%                 indLHS(end) = 764;
+%             elseif trial == 24
+%                 indRHS(2) = 721;
+%                 indLHS(3) = 865;
+%             elseif trial == 27
+%                 indLHS(end-1) = [];
+%             elseif trial == 31
+%                 indLHS(3) = [];
+%                 indRHS(1) = 425;
+%                 indRHS(3) = 1082;
+%             elseif trial == 34
+%                 indLHS(3) = [];
+%             elseif trial == 39
+%                 indLHS(end) = 732;
+%             elseif trial == 47
+%                 indRHS(2) = 595;
+%             end
+%         elseif subj == 5
+%             if trial == 40
+%                 indRHS(2) = [];
+%             end
+%         end
 
         %% Calculate avg speed from distance traveled by torso marker during
         % forward walking portion
@@ -356,8 +377,8 @@ for n = 1:length(trialArray)
         
         %% Calculate ST and cadence for L and R separately and combined
         
-        LSTarray = calcST(indLHS,indRHS,fs);
-        RSTarray = calcST(indRHS,indLHS,fs);
+        LSTarray = calcST(indLHS,indRHS,fsM);
+        RSTarray = calcST(indRHS,indLHS,fsM);
         STarray = [LSTarray RSTarray];
         LST(n) = nanmean(LSTarray);
         RST(n) = nanmean(RSTarray);
@@ -367,7 +388,7 @@ for n = 1:length(trialArray)
         Rcad(n) = 1./RST(n).*60; 
         cad(n) = 1./ST(n).*60;
         
-        %% Force calculations. Preprocessing of force signal includes downsampling to match marker data and then medfilter
+        %% Force calculations. 
         if analyzeForces == 1 
             if plotFzV == 1 % Plot raw voltages (no filtering) for each trial. A way to check that bias voltage value makes sense.
                 s = size(trialData.rawData.analog.otherid);
@@ -381,15 +402,15 @@ for n = 1:length(trialArray)
                         chan.FT1.Fz = row;
                     end
                 end
-                % change sampling to match marker data
-                FT1.Fx = downsample(trialData.rawData.analog.other(:,chan.FT1.Fx),10); 
-                FT1.Fy = downsample(trialData.rawData.analog.other(:,chan.FT1.Fy),10);
-                FT1.Fz = downsample(trialData.rawData.analog.other(:,chan.FT1.Fz),10); 
-
                 % Filter force data (this is the only time it's filtered)
-                Fx1 = filtfilt(Bf,Af,FT1.Fx);
-                Fy1 = filtfilt(Bf,Af,FT1.Fy);
-                Fz1 = filtfilt(Bf,Af,FT1.Fz);
+                FT1.Fx1 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fx));
+                FT1.Fy1 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fy));
+                FT1.Fz1 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fz));
+                
+                % change sampling to match marker data
+                Fx = downsample(FT1.Fx,fsa/fs); 
+                Fy = downsample(FT1.Fy,fsa/fs);
+                Fz = downsample(FT1.Fz,fsa/fs); 
 
                 plotind = plotind + 1;
                 subplot(numrows,numcols,plotind)
@@ -422,21 +443,22 @@ for n = 1:length(trialArray)
                          chan.FT2.Fz = row;
                      end
                  end
-                 % change sampling to match marker data
-                 FT1.Fx = downsample(trialData.rawData.analog.other(:,chan.FT1.Fx),10); 
-                 FT1.Fy = downsample(trialData.rawData.analog.other(:,chan.FT1.Fy),10);
-                 FT1.Fz = downsample(trialData.rawData.analog.other(:,chan.FT1.Fz),10); 
-                 FT2.Fx = downsample(trialData.rawData.analog.other(:,chan.FT2.Fx),10); 
-                 FT2.Fy = downsample(trialData.rawData.analog.other(:,chan.FT2.Fy),10);
-                 FT2.Fz = downsample(trialData.rawData.analog.other(:,chan.FT2.Fz),10); 
                  
                  % Filter force data (this is the only time it's filtered)
-                 Fx1 = filtfilt(Bf,Af,FT1.Fx);
-                 Fy1 = filtfilt(Bf,Af,FT1.Fy);
-                 Fz1 = filtfilt(Bf,Af,FT1.Fz);
-                 Fx2 = filtfilt(Bf,Af,FT2.Fx);
-                 Fy2 = filtfilt(Bf,Af,FT2.Fy);
-                 Fz2 = filtfilt(Bf,Af,FT2.Fz);
+                 FT1.Fx1 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fx));
+                 FT1.Fy1 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fy));
+                 FT1.Fz1 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fz));
+                 FT2.Fx2 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT2.Fx));
+                 FT2.Fy2 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT2.Fy));
+                 FT2.Fz2 = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT2.Fz));
+                
+                 % change sampling to match marker data
+                 Fx1 = downsample(FT1.Fx,fsa/fs); 
+                 Fy1 = downsample(FT1.Fy,fsa/fs);
+                 Fz1 = downsample(FT1.Fz,fsa/fs); 
+                 Fx2 = downsample(FT2.Fx,fsa/fs); 
+                 Fy2 = downsample(FT2.Fy,fsa/fs);
+                 Fz2 = downsample(FT2.Fz,fsa/fs);
 
                  % Lump together off-axis forces bc unsure of marker
                  % orientation without recoverForces code and bc markers
