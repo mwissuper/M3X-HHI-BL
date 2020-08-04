@@ -1,4 +1,6 @@
-% Check drift on FH's when held horizontally
+% Check drift on FH's when held horizontally. See if bias values are
+% comparable from solo walking trial vs. these trials. See if FT2 is
+% consistent across BL10 and BL11.
 
 % Load trials
 % Calculate mean voltage each force axis
@@ -8,9 +10,10 @@
 
 clear; clc; close all;
 
-% Analysis options
+%% Analysis options
 
 subj = 11; 
+fcA = 10;
 
 %% Plotting options
 plotFzTime = 1;
@@ -30,11 +33,19 @@ numrows = 2;
 numcols = 3;
 plotind = 0;
 
+indStart = 10; indEnd = 120; % Look at short time period and keep consistent across all trials. Shart transient at beg of trials
+
 %% Loop through all trials for participant
 for n = 1:length(trialArray)
     trial = trialArray(n);
     filename = sprintf('calib0%i.mat',trialArray(n));
     trialData = load([sourcefolder,'\',subjFolder,'\',filename]);
+    
+    % Set up filters
+    fsM = trialData.VideoFrameRate;  
+    fsA = trialData.AnalogFrameRate;
+    wn = fcA/(fsA/2);
+    [Bf,Af] = butter(4,wn,'low');
      
     s = size(trialData.rawData.analog.otherid);
     % Loop through all id names for analog input channels to pull out forces 
@@ -53,44 +64,29 @@ for n = 1:length(trialArray)
             chan.FT2.Fz = row;
         end
     end
-    % change sampling to match marker data
-    FT1.Fx = downsample(trialData.rawData.analog.other(:,chan.FT1.Fx),10); 
-    FT1.Fy = downsample(trialData.rawData.analog.other(:,chan.FT1.Fy),10);
-    FT1.Fz = downsample(trialData.rawData.analog.other(:,chan.FT1.Fz),10); 
-    FT2.Fx = downsample(trialData.rawData.analog.other(:,chan.FT2.Fx),10); 
-    FT2.Fy = downsample(trialData.rawData.analog.other(:,chan.FT2.Fy),10);
-    FT2.Fz = downsample(trialData.rawData.analog.other(:,chan.FT2.Fz),10);
     
-    indStart = 1; indEnd = 120; % Look at short time period and keep consistent across all trials
-    
-    % Median filter forces to reduce noise, multiply by factor to
-    % convert to N from V. FT2 gains changed 12/5/19 from 5V
-    % FS to 10V FS.
-    if subj < 10
-        SFz2 = 1/0.01;
-        SFxy2 = 1/0.04;
-    else
-        SFz2 = 1/0.02;
-        SFxy2 = 1/0.08;
-    end
-    SFz1 = 1/0.02;
-    SFxy1 = 1/0.08;
-    Fz1 = medfilt1(FT1.Fz)*SFz1;
-    Fz2 = medfilt1(FT2.Fz)*SFz2;
-    Fx1 = medfilt1(FT1.Fx)*SFxy1;
-    Fx2 = medfilt1(FT2.Fx)*SFxy2;
-    Fy1 = medfilt1(FT1.Fy)*SFxy1;
-    Fy2 = medfilt1(FT2.Fy)*SFxy2;
+     % Filter force data (this is the only time it's filtered)
+     % and subtract out voltage bias when known
+     FT1.Fx = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fx));
+     FT1.Fy = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fy));
+     FT1.Fz = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT1.Fz));
+     FT2.Fx = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT2.Fx));
+     FT2.Fy = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT2.Fy));
+     FT2.Fz = filtfilt(Bf,Af,trialData.rawData.analog.other(:,chan.FT2.Fz));
 
+     % change sampling to match marker data
+     Fx1 = downsample(FT1.Fx,fsA/fsM); 
+     Fy1 = downsample(FT1.Fy,fsA/fsM);
+     Fz1 = downsample(FT1.Fz,fsA/fsM); 
+     Fx2 = downsample(FT2.Fx,fsA/fsM); 
+     Fy2 = downsample(FT2.Fy,fsA/fsM);
+     Fz2 = downsample(FT2.Fz,fsA/fsM);
+    
     % Just use mean during period of interest as metric
     meanFz1(n) = nanmean(Fz1(indStart:indEnd));
-    meanFx1(n) = nanmean(Fx1(indStart:indEnd));
-    meanFy1(n) = nanmean(Fy1(indStart:indEnd));
-    meanFz2(n) = nanmean(Fz2(indStart:indEnd));
-    meanFx2(n) = nanmean(Fx2(indStart:indEnd));
-    meanFy2(n) = nanmean(Fy2(indStart:indEnd));
+    meanFz2(n) = nanmean(Fz2(indStart:indEnd));    
     
-    % Trial 6 has partner FT2 disconnected so do not use!
+    % Trials where partner FT2 disconnected so do not use!
     if (subj == 10 && trial == 6) || (subj == 11 && trial == 5)
         meanFz2(n) = nan;
         meanFx2(n) = nan;
@@ -101,19 +97,35 @@ for n = 1:length(trialArray)
     %% Plots
     if plotFzTime == 1
         plotind = plotind + 1;
-        subplot(numrows,numcols,plotind);
+        subplot(numrows,numcols,plotind); hold on;
         if subj == 10 && trial ~= 6 || (subj == 11 && trial ~= 5)
-            plot(trialData.mtime(indStart:indEnd),Fz1(indStart:indEnd),'g',trialData.mtime(indStart:indEnd),Fz2(indStart:indEnd),'b'); % Participant L hand blue, R hand green
+            plot(trialData.mtime,Fz1);
+            plot(trialData.mtime(indStart:indEnd),meanFz1(n)*ones(size(indStart:indEnd)),'linewidth',2);
+            %,trialData.mtime(indStart:indEnd),Fz2(indStart:indEnd),'b'); % Participant L hand blue, R hand green
         else
-            plot(trialData.mtime(indStart:indEnd),Fz1(indStart:indEnd),'g'); % Participant FT1 only
+            plot(trialData.mtime,Fz1);
+            plot(trialData.mtime(indStart:indEnd),meanFz1(n)*ones(size(indStart:indEnd)),'linewidth',2); % Participant FT1 only
         end
-        hline(meanFz1(n),'g'); hline(meanFz2(n),'b');
         titlename = sprintf('Trial %i',trial);title(titlename);
-        ylabel('Fz axial (N)');
+        ylabel('Fz axial (V)');
+        if subj == 10
+            ylim([-0.07 -0.03]);
+        end
     end
 end
 
-%% Plot mean vs. trial and linfit
-[p1, stat] = polyfit(1:length(meanFz1),meanFz1,1);
-subplot(2,1,1),plot(meanFz1,'gx'); ylabel('F (N)'),xlabel('Trial')
-subplot(2,1,2),plot(meanFz2,'bx'); ylabel('F (N)'),xlabel('Trial')
+%% Plot mean vs. trial and mean across trials
+
+titlename = sprintf('BL%i',subj);
+if subj == 10
+    xlab = {'8.5','18.5','28.5','38.5','51.5','63.5'};
+    xtickarray = 1:6;
+else
+    xlab = {'18.5','28.5','38.5','49.5','60.5'};
+    xtickarray = 1:5;
+end
+
+subplot(2,1,1),plot(meanFzV1,'g','marker','x'); ylabel('Fz1 (V)'),xlabel('Trial')
+title(titlename); set(gca,'xtick',xtickarray,'xticklabel',xlab); box off; set(gca,'tickdir','out');
+subplot(2,1,2),plot(meanFzV2,'b','marker','x'); ylabel('Fz2 (V)'),xlabel('Trial')
+set(gca,'xtick',xtickarray,'xticklabel',xlab); box off; set(gca,'tickdir','out');
